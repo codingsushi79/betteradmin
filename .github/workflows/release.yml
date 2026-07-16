@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - mc_target: '26'
-            java_version: '20'
+            java_version: '25'
             game_version_range: '26.x.x'
             modrinth_game_versions: |-
               26.2

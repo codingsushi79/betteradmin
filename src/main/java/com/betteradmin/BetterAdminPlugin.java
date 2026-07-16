@@ -550,7 +550,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
-                target.setHealth(target.getAttribute(org.bukkit.attribute.Attribute.GENERIC_MAX_HEALTH).getValue());
+                target.setHealth(target.getAttribute(org.bukkit.attribute.Attribute.MAX_HEALTH).getValue());
                 target.setFoodLevel(20);
                 target.setSaturation(20f);
                 player.sendMessage(formatColor("messages.healed", Map.of("target", target.getName())));
