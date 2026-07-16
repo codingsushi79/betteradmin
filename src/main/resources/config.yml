@@ -1,0 +1,50 @@
+messages:
+  only-player: "Only in-game players can use this command."
+  no-permission: "You do not have permission to open the admin panel."
+  player-offline: "That player is not online or could not be found."
+  refresh-success: "Admin menu refreshed."
+  reason-prompt: "Type the reason in chat and press enter. Type 'default' to use the standard reason."
+  mute-prompt: "Type mute duration and optional reason in chat, e.g. 10m Spamming."
+  tempban-prompt: "Type tempban duration and optional reason in chat, e.g. 1d Griefing."
+  lookup-prompt: "Type the player name or UUID to look up in chat."
+  lookup-failed: "Unable to resolve that player name or UUID."
+  action-complete: "{actor} performed {action} on {target}."
+  kicked: "Kicked {target}: {reason}."
+  banned: "Banned {target}: {reason}."
+  tempbanned: "Temporarily banned {target} for {duration}: {reason}."
+  muted: "Muted {target} for {duration}."
+  unmuted: "Unmuted {target}."
+  already-muted: "{target} is already muted."
+  already-unmuted: "{target} is not muted."
+  player-frozen: "{target} has been frozen."
+  player-unfrozen: "{target} has been unfrozen."
+  cannot-perform-offline: "That action requires the player to be online."
+  history-title: "Recent admin actions"
+  no-history: "No history entries yet."
+  mute-chat-block: "You are muted for {reason} until {until}."
+  lookup-prompt-usage: "Enter a player name or UUID to manage."
+  invalid-duration: "Invalid duration format. Use values like 10m, 2h, or 1d."
+  lookup-opened: "Managing player {target}."
+  info-player: "{target} is online with {health}❤, {food} food, {gamemode}, ping {ping}."
+  not-online-for-inv: "Player must be online to view inventory or ender chest."
+  healed: "Healed {target}."
+  fed: "Fed {target}."
+  teleported: "Teleported to {target}."
+  lookup-result-offline: "Opened actions for offline player {target}. Only ban/tempban actions will work."
+
+permissions:
+  use: betteradmin.use
+  lookup: betteradmin.lookup
+  history: betteradmin.history
+  kick: betteradmin.kick
+  ban: betteradmin.ban
+  tempban: betteradmin.tempban
+  mute: betteradmin.mute
+  unmute: betteradmin.unmute
+  freeze: betteradmin.freeze
+  teleport: betteradmin.teleport
+  heal: betteradmin.heal
+  feed: betteradmin.feed
+  viewinventory: betteradmin.viewinventory
+  viewenderchest: betteradmin.viewenderchest
+  info: betteradmin.info

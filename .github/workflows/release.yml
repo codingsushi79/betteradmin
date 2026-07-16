@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java 20
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '20'
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+      - name: Build plugin
+        run: ./gradlew build --no-daemon
+      - name: Upload release artifact
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: Release ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Upload plugin jar to release
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.release.outputs.upload_url }}
+          asset_path: build/libs/betteradmin.jar
+          asset_name: betteradmin-${{ github.ref_name }}.jar
+          asset_content_type: application/java-archive
+
+  publish_modrinth:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java 20
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '20'
+      - name: Build plugin
+        run: ./gradlew build --no-daemon
+      - name: Publish to Modrinth
+        uses: peterjgrainger/action-modrinth@v1.1.2
+        with:
+          token: ${{ secrets.MODRINTH_API_TOKEN }}
+          project_id: betteradmin
+          version_number: ${{ github.ref_name }}
+          changelog: "Release ${{ github.ref_name }}"
+          version_type: mod
+          game_versions: |
+            26.2
+          loaders: |
+            paper
+          file: build/libs/betteradmin.jar
+          featured: false
+          dependencies: |
+            []

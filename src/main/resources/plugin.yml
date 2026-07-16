@@ -1,0 +1,57 @@
+name: BetterAdmin
+main: com.betteradmin.BetterAdminPlugin
+version: 1.0.0+26.2
+api-version: 26.2
+author: BetterAdmin
+description: GUI-based server admin tool for kicking, banning, inventory viewing, teleporting, and more.
+commands:
+  adminpanel:
+    description: Open the BetterAdmin GUI.
+    usage: /adminpanel
+    permission: betteradmin.use
+permissions:
+  betteradmin.use:
+    description: Allows opening the BetterAdmin GUI.
+    default: op
+  betteradmin.lookup:
+    description: Allows looking up players by name or UUID.
+    default: op
+  betteradmin.history:
+    description: Allows viewing admin history.
+    default: op
+  betteradmin.kick:
+    description: Allows kicking players.
+    default: op
+  betteradmin.ban:
+    description: Allows permanently banning players.
+    default: op
+  betteradmin.tempban:
+    description: Allows temporarily banning players.
+    default: op
+  betteradmin.mute:
+    description: Allows muting players.
+    default: op
+  betteradmin.unmute:
+    description: Allows unmuting players.
+    default: op
+  betteradmin.freeze:
+    description: Allows freezing players.
+    default: op
+  betteradmin.teleport:
+    description: Allows teleporting to players.
+    default: op
+  betteradmin.heal:
+    description: Allows healing players.
+    default: op
+  betteradmin.feed:
+    description: Allows feeding players.
+    default: op
+  betteradmin.viewinventory:
+    description: Allows viewing player inventories.
+    default: op
+  betteradmin.viewenderchest:
+    description: Allows viewing player ender chests.
+    default: op
+  betteradmin.info:
+    description: Allows viewing player information.
+    default: op
