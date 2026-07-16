@@ -84,11 +84,27 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew build --no-daemon -PreleaseVersion="$VERSION" -PmcTarget="${{ matrix.mc_target }}" -PgameVersionRange="${{ matrix.game_version_range }}"
 
+      - name: Resolve Modrinth project ID
+        id: resolve_modrinth_project
+        run: |
+          # Provide the project value used below (slug or id). Update if you change the literal.
+          INPUT_PROJECT="betteradmin"
+          echo "Resolving Modrinth project for: $INPUT_PROJECT"
+          # Try resolve as slug first via the public API; fall back to the provided value if resolution fails.
+          PROJECT_ID=$(curl -fsSL "https://api.modrinth.com/v2/project/${INPUT_PROJECT}" 2>/dev/null | jq -r .id 2>/dev/null || true)
+          if [ -n "$PROJECT_ID" ] && [ "$PROJECT_ID" != "null" ]; then
+            echo "Resolved project id: $PROJECT_ID"
+            echo "MODRINTH_PROJECT_ID=$PROJECT_ID" >> "$GITHUB_ENV"
+          else
+            echo "Could not resolve slug; assuming provided value is already an ID"
+            echo "MODRINTH_PROJECT_ID=$INPUT_PROJECT" >> "$GITHUB_ENV"
+          fi
+
       - name: Upload to Modrinth
         uses: cloudnode-pro/modrinth-publish@v2
         with:
           token: ${{ secrets.MODRINTH_TOKEN }}
-          project: betteradmin
+          project: ${{ env.MODRINTH_PROJECT_ID }}
           name: ${{ env.MODRINTH_NAME }}
           version: ${{ env.MODRINTH_VERSION }}
           changelog: ${{ env.CHANGELOG }}
