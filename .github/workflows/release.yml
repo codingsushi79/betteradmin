@@ -77,7 +77,7 @@ jobs:
           if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
             echo "Downloading missing gradle-wrapper.jar"
             mkdir -p gradle/wrapper
-            curl -L -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.4-bin.zip
+            curl -L -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.2.1-bin.zip
             unzip -p /tmp/gradle.zip gradle/wrapper/gradle-wrapper.jar > gradle/wrapper/gradle-wrapper.jar
           fi
 
