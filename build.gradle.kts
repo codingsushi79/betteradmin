@@ -1,6 +1,6 @@
 plugins {
     java
-    id("io.papermc.paperweight.userdev") version "1.5.0"
+    id("io.papermc.paperweight.userdev") version "1.7.5-SNAPSHOT"
 }
 
 java {
@@ -15,11 +15,16 @@ version = "1.0.0+26.2"
 repositories {
     mavenCentral()
     maven("https://repo.papermc.io/repository/maven-public/")
+    maven("https://repo.papermc.io/repository/maven-snapshots/")
 }
 
 dependencies {
-    paperweightDevelopmentBundle("io.papermc.paper:dev-bundle:26.2.build.60-beta")
+    paperweightDevelopmentBundle("io.papermc.paper:dev-bundle:26.2.build.60-beta@zip")
 }
+
+val releaseVersion: String? by project
+val mcTarget: String? by project
+val gameVersionRange: String? by project
 
 tasks {
     compileJava {
@@ -30,6 +35,17 @@ tasks {
     }
     jar {
         archiveBaseName.set("betteradmin")
+        archiveVersion.set("")
+        archiveFileName.set(
+            when {
+                !releaseVersion.isNullOrBlank() && !gameVersionRange.isNullOrBlank() ->
+                    "betteradmin-${releaseVersion}-${gameVersionRange}.jar"
+                !releaseVersion.isNullOrBlank() && !mcTarget.isNullOrBlank() ->
+                    "betteradmin-${releaseVersion}-${mcTarget}.jar"
+                else ->
+                    "betteradmin.jar"
+            }
+        )
         from(sourceSets.main.get().resources.srcDirs) {
             duplicatesStrategy = DuplicatesStrategy.EXCLUDE
         }
