@@ -88,7 +88,7 @@ jobs:
         uses: cloudnode-pro/modrinth-publish@v2
         with:
           token: ${{ secrets.MODRINTH_API_TOKEN }}
-          project: betteradmin
+          project: QKYxXGy0
           name: ${{ env.MODRINTH_NAME }}
           version: ${{ env.MODRINTH_VERSION }}
           changelog: ${{ env.CHANGELOG }}
@@ -123,7 +123,7 @@ jobs:
           MODRINTH_26_SLUG="${VERSION}%2B26.x.x"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "GITHUB_RELEASE_URL=$GITHUB_RELEASE_URL" >> "$GITHUB_ENV"
-          echo "MODRINTH_26_URL=https://modrinth.com/plugin/betteradmin/version/${MODRINTH_26_SLUG}" >> "$GITHUB_ENV"
+          echo "MODRINTH_26_URL=https://modrinth.com/plugin/QKYxXGy0/version/${MODRINTH_26_SLUG}" >> "$GITHUB_ENV"
 
       - name: Notify Discord
         env:
