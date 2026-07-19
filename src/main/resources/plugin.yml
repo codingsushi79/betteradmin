@@ -6,8 +6,8 @@ author: BetterAdmin
 description: GUI-based server admin tool for kicking, banning, inventory viewing, teleporting, and more.
 commands:
   adminpanel:
-    description: Open the BetterAdmin GUI.
-    usage: /adminpanel
+    description: Open the BetterAdmin GUI. Use "reload" to reload config.yml.
+    usage: /adminpanel [reload]
     permission: betteradmin.use
 permissions:
   betteradmin.use:
@@ -54,4 +54,13 @@ permissions:
     default: op
   betteradmin.info:
     description: Allows viewing player information.
+    default: op
+  betteradmin.vanish:
+    description: Allows toggling staff vanish mode.
+    default: op
+  betteradmin.reload:
+    description: Allows reloading BetterAdmin's config.yml.
+    default: op
+  betteradmin.undo:
+    description: Allows reverting a ban, tempban, mute, or freeze from the history menu.
     default: op

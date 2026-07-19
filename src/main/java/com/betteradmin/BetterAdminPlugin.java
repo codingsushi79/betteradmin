@@ -5,12 +5,12 @@ import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
-import org.bukkit.BanEntry;
-import org.bukkit.BanList;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -18,7 +18,6 @@ import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
-import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -27,6 +26,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -39,14 +39,22 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 
 public final class BetterAdminPlugin extends JavaPlugin implements Listener, CommandExecutor {
+    private static final int PLAYER_PAGE_SIZE = 16;
+    private static final int HISTORY_PAGE_SIZE = 7;
+
     private final Map<UUID, PendingAction> pendingActions = new HashMap<>();
+    private final Map<UUID, PendingConfirmation> pendingConfirmations = new HashMap<>();
     private final Map<UUID, MuteEntry> mutedPlayers = new HashMap<>();
     private final Map<UUID, Instant> frozenPlayers = new HashMap<>();
+    private final Set<UUID> vanishedPlayers = new HashSet<>();
+    private final Map<UUID, Integer> playerListPage = new HashMap<>();
+    private final Map<UUID, Integer> historyPage = new HashMap<>();
     private final List<AdminHistoryEntry> historyEntries = new ArrayList<>();
 
     private NamespacedKey actionKey;
     private NamespacedKey targetKey;
     private FileConfiguration config;
+    private PlayerDataStore dataStore;
 
     @Override
     public void onEnable() {
@@ -55,6 +63,12 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
         actionKey = new NamespacedKey(this, "betteradmin-action");
         targetKey = new NamespacedKey(this, "betteradmin-target");
 
+        dataStore = new PlayerDataStore(this);
+        PlayerDataStore.LoadResult loaded = dataStore.load();
+        mutedPlayers.putAll(loaded.mutes());
+        frozenPlayers.putAll(loaded.frozen());
+        historyEntries.addAll(loaded.history());
+
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("adminpanel") != null) {
             getCommand("adminpanel").setExecutor(this);
@@ -62,7 +76,22 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
     }
 
     @Override
+    public void onDisable() {
+        persist();
+    }
+
+    @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+            if (!sender.hasPermission(getPermission("reload"))) {
+                sender.sendMessage(formatColor("messages.no-permission"));
+                return true;
+            }
+            reloadConfig();
+            config = getConfig();
+            sender.sendMessage(formatColor("messages.config-reloaded"));
+            return true;
+        }
         if (!(sender instanceof Player player)) {
             sender.sendMessage(formatColor("messages.only-player"));
             return true;
@@ -71,21 +100,28 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
             player.sendMessage(formatColor("messages.no-permission"));
             return true;
         }
-        player.openInventory(createPlayerListMenu(player));
+        player.openInventory(createPlayerListMenu(player, 0));
         return true;
     }
 
-    private Inventory createPlayerListMenu(Player viewer) {
+    private Inventory createPlayerListMenu(Player viewer, int page) {
+        List<Player> others = new ArrayList<>();
+        for (Player target : Bukkit.getOnlinePlayers()) {
+            if (!target.equals(viewer)) {
+                others.add(target);
+            }
+        }
+        int totalPages = Math.max(1, (int) Math.ceil(others.size() / (double) PLAYER_PAGE_SIZE));
+        int clampedPage = Math.max(0, Math.min(page, totalPages - 1));
+        playerListPage.put(viewer.getUniqueId(), clampedPage);
+
         Inventory inventory = Bukkit.createInventory(null, 54, Component.text("BetterAdmin Panel"));
 
+        int start = clampedPage * PLAYER_PAGE_SIZE;
+        int end = Math.min(start + PLAYER_PAGE_SIZE, others.size());
         int slot = 10;
-        for (Player target : Bukkit.getOnlinePlayers()) {
-            if (target.equals(viewer)) {
-                continue;
-            }
-            if (slot >= 53) {
-                break;
-            }
+        for (int i = start; i < end; i++) {
+            Player target = others.get(i);
             inventory.setItem(slot, createMenuItem(Material.PLAYER_HEAD,
                     Component.text(target.getName()).color(NamedTextColor.GREEN),
                     Component.text("Click to manage this player").color(NamedTextColor.GRAY),
@@ -96,10 +132,18 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
             }
         }
 
-        inventory.setItem(45, createMenuItem(Material.COMPASS,
-                Component.text("Refresh Menu").color(NamedTextColor.GOLD),
-                Component.text("Click to refresh online players").color(NamedTextColor.GRAY),
-                "refresh", ""));
+        if (clampedPage > 0) {
+            inventory.setItem(45, createMenuItem(Material.ARROW,
+                    Component.text("Previous Page").color(NamedTextColor.YELLOW),
+                    Component.text("Page " + clampedPage + " / " + totalPages).color(NamedTextColor.GRAY),
+                    "player-prev", ""));
+        }
+        boolean vanished = vanishedPlayers.contains(viewer.getUniqueId());
+        inventory.setItem(46, createMenuItem(vanished ? Material.ENDER_EYE : Material.GLASS,
+                vanished ? Component.text("Vanish: ON").color(NamedTextColor.LIGHT_PURPLE)
+                        : Component.text("Vanish: OFF").color(NamedTextColor.GRAY),
+                Component.text("Click to toggle your visibility").color(NamedTextColor.GRAY),
+                "vanish", ""));
         inventory.setItem(47, createMenuItem(Material.BOOK,
                 Component.text("Lookup Player").color(NamedTextColor.AQUA),
                 Component.text("Search by name or UUID").color(NamedTextColor.GRAY),
@@ -112,11 +156,17 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                 Component.text("Close Panel").color(NamedTextColor.RED),
                 Component.text("Close the admin panel").color(NamedTextColor.GRAY),
                 "close", ""));
+        if (clampedPage < totalPages - 1) {
+            inventory.setItem(53, createMenuItem(Material.ARROW,
+                    Component.text("Next Page").color(NamedTextColor.YELLOW),
+                    Component.text("Page " + (clampedPage + 2) + " / " + totalPages).color(NamedTextColor.GRAY),
+                    "player-next", ""));
+        }
 
         return inventory;
     }
 
-    private Inventory createActionMenu(Player viewer, String targetName, boolean online) {
+    private Inventory createActionMenu(Player viewer, String targetName, boolean online, UUID targetUuid) {
         Inventory inventory = Bukkit.createInventory(null, 27,
                 Component.text("Manage: ").append(Component.text(targetName).color(NamedTextColor.AQUA)));
         if (online) {
@@ -140,12 +190,16 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     Component.text("View Ender Chest").color(NamedTextColor.LIGHT_PURPLE),
                     Component.text("Inspect their ender chest").color(NamedTextColor.GRAY),
                     "view-ender", targetName));
-            inventory.setItem(20, createMenuItem(Material.SNOWBALL,
-                    Component.text("Freeze Player").color(NamedTextColor.AQUA),
-                    Component.text("Prevent movement until unfrozen").color(NamedTextColor.GRAY),
+            boolean frozen = targetUuid != null && frozenPlayers.containsKey(targetUuid);
+            inventory.setItem(20, createMenuItem(frozen ? Material.PACKED_ICE : Material.SNOWBALL,
+                    frozen ? Component.text("Unfreeze Player").color(NamedTextColor.AQUA)
+                            : Component.text("Freeze Player").color(NamedTextColor.AQUA),
+                    frozen ? Component.text("Allow movement again").color(NamedTextColor.GRAY)
+                            : Component.text("Prevent movement until unfrozen").color(NamedTextColor.GRAY),
                     "freeze", targetName));
+            boolean muted = targetUuid != null && mutedPlayers.containsKey(targetUuid);
             inventory.setItem(22, createMenuItem(Material.LEATHER_BOOTS,
-                    Component.text("Mute Player").color(NamedTextColor.BLUE),
+                    Component.text(muted ? "Muted" : "Mute Player").color(NamedTextColor.BLUE),
                     Component.text("Mute chat for this player").color(NamedTextColor.GRAY),
                     "mute", targetName));
             inventory.setItem(24, createMenuItem(Material.FEATHER,
@@ -182,7 +236,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     Component.text("See basic stored player info").color(NamedTextColor.GRAY),
                     "info", targetName));
         }
-        inventory.setItem(22, createMenuItem(Material.BARRIER,
+        inventory.setItem(0, createMenuItem(Material.BARRIER,
                 Component.text("Back").color(NamedTextColor.RED),
                 Component.text("Return to the player list").color(NamedTextColor.GRAY),
                 "back", ""));
@@ -240,45 +294,103 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
         return viewerInv;
     }
 
-    private Inventory createHistoryMenu(Player viewer) {
-        Inventory inventory = Bukkit.createInventory(null, 27, Component.text("BetterAdmin History"));
+    private Inventory createHistoryMenu(Player viewer, int page) {
+        int totalPages = Math.max(1, (int) Math.ceil(historyEntries.size() / (double) HISTORY_PAGE_SIZE));
+        int clampedPage = Math.max(0, Math.min(page, totalPages - 1));
+        historyPage.put(viewer.getUniqueId(), clampedPage);
+
+        Inventory inventory = Bukkit.createInventory(null, 54, Component.text("BetterAdmin History"));
+
         if (historyEntries.isEmpty()) {
             inventory.setItem(13, createMenuItem(Material.PAPER,
                     Component.text(getMessage("messages.no-history")).color(NamedTextColor.GRAY),
                     Component.text("No history entries yet.").color(NamedTextColor.DARK_GRAY),
                     "info", ""));
         } else {
-            int slot = 10;
-            for (AdminHistoryEntry entry : historyEntries) {
-                if (slot >= 26) {
-                    break;
+            int start = clampedPage * HISTORY_PAGE_SIZE;
+            int end = Math.min(start + HISTORY_PAGE_SIZE, historyEntries.size());
+            for (int i = start; i < end; i++) {
+                AdminHistoryEntry entry = historyEntries.get(i);
+                int entrySlot = 10 + (i - start);
+
+                List<Component> lore = new ArrayList<>();
+                lore.add(Component.text(DateTimeFormatter.ISO_INSTANT.format(entry.timestamp()))
+                        .color(NamedTextColor.DARK_GRAY));
+                lore.add(entry.actor() != null
+                        ? Component.text(entry.actor()).color(NamedTextColor.GREEN)
+                                .append(Component.text(" -> ").color(NamedTextColor.GRAY))
+                                .append(Component.text(entry.target()).color(NamedTextColor.AQUA))
+                        : Component.text(entry.target()).color(NamedTextColor.AQUA));
+                if (!entry.reason().isEmpty()) {
+                    lore.add(Component.text("Reason: " + entry.reason()).color(NamedTextColor.GRAY));
                 }
-                Component name = Component.text(entry.timestamp().toString()).color(NamedTextColor.GRAY);
-                Component lore = Component.text(entry.actor()).color(NamedTextColor.GREEN)
-                        .append(Component.text(" -> ").color(NamedTextColor.GRAY))
-                        .append(Component.text(entry.action()).color(NamedTextColor.YELLOW))
-                        .append(Component.text(" ")).append(Component.text(entry.target()).color(NamedTextColor.AQUA));
-                inventory.setItem(slot,
-                        createMenuItem(Material.PAPER, name, lore, "info", ""));
-                slot++;
-                if ((slot % 9) == 0) {
-                    slot++;
+                if (entry.undone()) {
+                    lore.add(Component.text("Reverted").color(NamedTextColor.RED));
+                }
+
+                inventory.setItem(entrySlot, createMenuItem(Material.PAPER,
+                        Component.text(entry.action().toUpperCase()).color(NamedTextColor.YELLOW),
+                        lore, "info", ""));
+
+                if (entry.isUndoable()) {
+                    inventory.setItem(entrySlot + 9, createMenuItem(Material.ORANGE_DYE,
+                            Component.text("Undo").color(NamedTextColor.GOLD),
+                            Component.text("Reverse this action").color(NamedTextColor.GRAY),
+                            "undo-history", String.valueOf(i)));
                 }
             }
         }
-        inventory.setItem(22, createMenuItem(Material.BARRIER,
+
+        if (clampedPage > 0) {
+            inventory.setItem(45, createMenuItem(Material.ARROW,
+                    Component.text("Previous Page").color(NamedTextColor.YELLOW),
+                    Component.text("Page " + clampedPage + " / " + totalPages).color(NamedTextColor.GRAY),
+                    "history-prev", ""));
+        }
+        inventory.setItem(49, createMenuItem(Material.BARRIER,
                 Component.text("Back").color(NamedTextColor.RED),
                 Component.text("Return to the player list").color(NamedTextColor.GRAY),
                 "back", ""));
+        if (clampedPage < totalPages - 1) {
+            inventory.setItem(53, createMenuItem(Material.ARROW,
+                    Component.text("Next Page").color(NamedTextColor.YELLOW),
+                    Component.text("Page " + (clampedPage + 2) + " / " + totalPages).color(NamedTextColor.GRAY),
+                    "history-next", ""));
+        }
         return inventory;
     }
 
+    private Inventory createConfirmMenu(Component summary) {
+        Inventory inventory = Bukkit.createInventory(null, 27, Component.text("BetterAdmin Confirm"));
+        inventory.setItem(13, createMenuItem(Material.PAPER,
+                Component.text("Confirm this action?").color(NamedTextColor.GOLD),
+                summary, "info", ""));
+        inventory.setItem(11, createMenuItem(Material.LIME_WOOL,
+                Component.text("Confirm").color(NamedTextColor.GREEN),
+                Component.text("Yes, proceed").color(NamedTextColor.GRAY),
+                "confirm", ""));
+        inventory.setItem(15, createMenuItem(Material.RED_WOOL,
+                Component.text("Cancel").color(NamedTextColor.RED),
+                Component.text("No, go back").color(NamedTextColor.GRAY),
+                "cancel-confirm", ""));
+        return inventory;
+    }
+
+    private void openConfirmation(Player player, Component summary, Runnable onConfirm) {
+        pendingConfirmations.put(player.getUniqueId(), new PendingConfirmation(onConfirm));
+        player.openInventory(createConfirmMenu(summary));
+    }
+
     private ItemStack createMenuItem(Material material, Component name, Component lore, String action, String targetName) {
+        return createMenuItem(material, name, List.of(lore), action, targetName);
+    }
+
+    private ItemStack createMenuItem(Material material, Component name, List<Component> lore, String action, String targetName) {
         ItemStack item = new ItemStack(material);
         ItemMeta meta = item.getItemMeta();
         if (meta != null) {
             meta.displayName(name);
-            meta.lore(List.of(lore));
+            meta.lore(lore);
             meta.getPersistentDataContainer().set(actionKey, PersistentDataType.STRING, action);
             meta.getPersistentDataContainer().set(targetKey, PersistentDataType.STRING, targetName);
             item.setItemMeta(meta);
@@ -328,11 +440,84 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
         return meta.getPersistentDataContainer().get(targetKey, PersistentDataType.STRING);
     }
 
-    private void addHistory(Player actor, String action, String target, String reason, String extra) {
-        historyEntries.add(0, new AdminHistoryEntry(Instant.now(), actor.getName(), action, target, reason, extra));
+    private void addHistory(Player actor, String action, String target, String targetUuid, String reason, String extra) {
+        historyEntries.add(0, new AdminHistoryEntry(Instant.now(), actor.getName(), action, target, targetUuid, reason, extra));
         if (historyEntries.size() > 21) {
             historyEntries.remove(historyEntries.size() - 1);
         }
+        persist();
+    }
+
+    private void persist() {
+        if (dataStore != null) {
+            dataStore.save(mutedPlayers, frozenPlayers, historyEntries);
+        }
+    }
+
+    private void undoHistoryEntry(Player admin, AdminHistoryEntry entry) {
+        UUID targetUuid;
+        try {
+            targetUuid = UUID.fromString(entry.targetUuid());
+        } catch (IllegalArgumentException ex) {
+            return;
+        }
+        switch (entry.action()) {
+            case "ban", "tempban" ->
+                    Bukkit.getBanList(io.papermc.paper.ban.BanListType.PROFILE).pardon(Bukkit.createProfile(targetUuid));
+            case "mute" -> mutedPlayers.remove(targetUuid);
+            case "freeze" -> frozenPlayers.remove(targetUuid);
+            default -> {
+                return;
+            }
+        }
+        entry.markUndone();
+        admin.sendMessage(formatColor("messages.undo-success",
+                Map.of("target", entry.target(), "action", entry.action())));
+        addHistory(admin, "undo-" + entry.action(), entry.target(), entry.targetUuid(), "", "");
+    }
+
+    private void toggleVanish(Player player) {
+        UUID uuid = player.getUniqueId();
+        boolean nowVanished = !vanishedPlayers.contains(uuid);
+        if (nowVanished) {
+            vanishedPlayers.add(uuid);
+        } else {
+            vanishedPlayers.remove(uuid);
+        }
+        for (Player other : Bukkit.getOnlinePlayers()) {
+            if (other.equals(player)) {
+                continue;
+            }
+            if (nowVanished) {
+                other.hidePlayer(this, player);
+            } else {
+                other.showPlayer(this, player);
+            }
+        }
+        player.sendMessage(nowVanished ? formatColor("messages.vanish-on") : formatColor("messages.vanish-off"));
+    }
+
+    private void executeBan(Player admin, OfflinePlayer targetOffline, String name, UUID targetUuid, String reason) {
+        targetOffline.ban(reason, (Instant) null, admin.getName());
+        if (targetOffline.isOnline()) {
+            ((Player) targetOffline).kick(Component.text("Banned: ").append(Component.text(reason)));
+        }
+        admin.sendMessage(formatColor("messages.banned", Map.of("target", name, "reason", reason)));
+        addHistory(admin, "ban", name, targetUuid.toString(), reason, "");
+    }
+
+    private void executeTempban(Player admin, OfflinePlayer targetOffline, String name, UUID targetUuid,
+            String reason, Duration duration, Instant expiry) {
+        targetOffline.ban(reason, expiry, admin.getName());
+        if (targetOffline.isOnline()) {
+            ((Player) targetOffline).kick(Component.text("Temporarily banned until ")
+                    .append(Component.text(expiry.toString())).append(Component.text(": ")).append(Component.text(reason)));
+        }
+        admin.sendMessage(formatColor("messages.tempbanned", Map.of(
+                "target", name,
+                "duration", duration.toString(),
+                "reason", reason)));
+        addHistory(admin, "tempban", name, targetUuid.toString(), reason, "expires=" + expiry);
     }
 
     private Duration parseDuration(String token) {
@@ -390,7 +575,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
             return;
         }
         String title = event.getView().title().toString();
-        if (!title.contains("BetterAdmin") && !title.contains("Manage:") && !title.contains("History")
+        if (!title.contains("BetterAdmin") && !title.contains("Manage:")
                 && !title.contains("Inventory") && !title.contains("Ender Chest")) {
             return;
         }
@@ -412,9 +597,23 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     player.closeInventory();
                     return;
                 }
-                player.openInventory(createActionMenu(player, target.getName(), true));
+                player.openInventory(createActionMenu(player, target.getName(), true, target.getUniqueId()));
             }
-            case "refresh" -> player.openInventory(createPlayerListMenu(player));
+            case "refresh" -> player.openInventory(
+                    createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0)));
+            case "player-prev" -> player.openInventory(
+                    createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0) - 1));
+            case "player-next" -> player.openInventory(
+                    createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0) + 1));
+            case "vanish" -> {
+                if (!player.hasPermission(getPermission("vanish"))) {
+                    player.sendMessage(formatColor("messages.no-permission"));
+                    return;
+                }
+                toggleVanish(player);
+                player.openInventory(
+                        createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0)));
+            }
             case "lookup" -> {
                 if (!player.hasPermission(getPermission("lookup"))) {
                     player.sendMessage(formatColor("messages.no-permission"));
@@ -429,50 +628,103 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     player.sendMessage(formatColor("messages.no-permission"));
                     return;
                 }
-                player.openInventory(createHistoryMenu(player));
+                player.openInventory(createHistoryMenu(player, 0));
+            }
+            case "history-prev" -> player.openInventory(
+                    createHistoryMenu(player, historyPage.getOrDefault(player.getUniqueId(), 0) - 1));
+            case "history-next" -> player.openInventory(
+                    createHistoryMenu(player, historyPage.getOrDefault(player.getUniqueId(), 0) + 1));
+            case "undo-history" -> {
+                if (!player.hasPermission(getPermission("undo"))) {
+                    player.sendMessage(formatColor("messages.no-permission"));
+                    return;
+                }
+                int index;
+                try {
+                    index = Integer.parseInt(targetName);
+                } catch (NumberFormatException ex) {
+                    return;
+                }
+                if (index < 0 || index >= historyEntries.size()) {
+                    return;
+                }
+                AdminHistoryEntry entry = historyEntries.get(index);
+                if (!entry.isUndoable()) {
+                    return;
+                }
+                undoHistoryEntry(player, entry);
+                player.openInventory(createHistoryMenu(player, historyPage.getOrDefault(player.getUniqueId(), 0)));
             }
             case "close" -> player.closeInventory();
-            case "back" -> player.openInventory(createPlayerListMenu(player));
-            case "kick", "ban", "tempban", "mute" -> {
+            case "back" -> player.openInventory(
+                    createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0)));
+            case "confirm" -> {
+                PendingConfirmation pending = pendingConfirmations.remove(player.getUniqueId());
+                player.closeInventory();
+                if (pending != null) {
+                    pending.onConfirm().run();
+                }
+            }
+            case "cancel-confirm" -> {
+                pendingConfirmations.remove(player.getUniqueId());
+                player.sendMessage(formatColor("messages.action-cancelled"));
+                player.openInventory(
+                        createPlayerListMenu(player, playerListPage.getOrDefault(player.getUniqueId(), 0)));
+            }
+            case "kick" -> {
                 if (targetName.isEmpty()) {
+                    return;
+                }
+                if (!player.hasPermission(getPermission("kick"))) {
+                    player.sendMessage(formatColor("messages.no-permission"));
                     return;
                 }
                 OfflinePlayer target = resolvePlayer(targetName);
                 if (target == null || !target.isOnline()) {
-                    if (action.equals("ban") || action.equals("tempban")) {
-                        pendingActions.put(player.getUniqueId(), new PendingAction(action, targetName));
-                        player.closeInventory();
-                        player.sendMessage(formatColor("messages.reason-prompt"));
-                        return;
-                    }
                     player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
-                if (action.equals("kick") && !player.hasPermission(getPermission("kick"))) {
+                pendingActions.put(player.getUniqueId(), new PendingAction("kick", target.getUniqueId().toString()));
+                player.closeInventory();
+                player.sendMessage(formatColor("messages.reason-prompt"));
+            }
+            case "ban", "tempban" -> {
+                if (targetName.isEmpty()) {
+                    return;
+                }
+                if (!player.hasPermission(getPermission(action))) {
                     player.sendMessage(formatColor("messages.no-permission"));
                     return;
                 }
-                if (action.equals("ban") && !player.hasPermission(getPermission("ban"))) {
-                    player.sendMessage(formatColor("messages.no-permission"));
-                    return;
-                }
-                if (action.equals("tempban") && !player.hasPermission(getPermission("tempban"))) {
-                    player.sendMessage(formatColor("messages.no-permission"));
-                    return;
-                }
-                if (action.equals("mute") && !player.hasPermission(getPermission("mute"))) {
-                    player.sendMessage(formatColor("messages.no-permission"));
+                OfflinePlayer target = resolvePlayer(targetName);
+                if (target == null) {
+                    player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
                 pendingActions.put(player.getUniqueId(), new PendingAction(action, target.getUniqueId().toString()));
                 player.closeInventory();
-                if (action.equals("tempban")) {
-                    player.sendMessage(formatColor("messages.tempban-prompt"));
-                } else if (action.equals("mute")) {
-                    player.sendMessage(formatColor("messages.mute-prompt"));
-                } else {
-                    player.sendMessage(formatColor("messages.reason-prompt"));
+                player.sendMessage(formatColor(action.equals("tempban") ? "messages.tempban-prompt" : "messages.reason-prompt"));
+            }
+            case "mute" -> {
+                if (targetName.isEmpty()) {
+                    return;
                 }
+                if (!player.hasPermission(getPermission("mute"))) {
+                    player.sendMessage(formatColor("messages.no-permission"));
+                    return;
+                }
+                OfflinePlayer target = resolvePlayer(targetName);
+                if (target == null || !target.isOnline()) {
+                    player.sendMessage(formatColor("messages.player-offline"));
+                    return;
+                }
+                if (mutedPlayers.containsKey(target.getUniqueId())) {
+                    player.sendMessage(formatColor("messages.already-muted", Map.of("target", target.getName())));
+                    return;
+                }
+                pendingActions.put(player.getUniqueId(), new PendingAction("mute", target.getUniqueId().toString()));
+                player.closeInventory();
+                player.sendMessage(formatColor("messages.mute-prompt"));
             }
             case "view-inv" -> {
                 if (!player.hasPermission(getPermission("viewinventory"))) {
@@ -521,8 +773,15 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
-                frozenPlayers.put(target.getUniqueId(), Instant.now());
-                player.sendMessage(formatColor("messages.player-frozen", Map.of("target", target.getName())));
+                if (frozenPlayers.remove(target.getUniqueId()) != null) {
+                    player.sendMessage(formatColor("messages.player-unfrozen", Map.of("target", target.getName())));
+                    addHistory(player, "unfreeze", target.getName(), target.getUniqueId().toString(), "", "");
+                } else {
+                    frozenPlayers.put(target.getUniqueId(), Instant.now());
+                    player.sendMessage(formatColor("messages.player-frozen", Map.of("target", target.getName())));
+                    addHistory(player, "freeze", target.getName(), target.getUniqueId().toString(), "", "");
+                }
+                player.openInventory(createActionMenu(player, target.getName(), true, target.getUniqueId()));
             }
             case "unmute" -> {
                 if (!player.hasPermission(getPermission("unmute"))) {
@@ -539,6 +798,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     return;
                 }
                 player.sendMessage(formatColor("messages.unmuted", Map.of("target", target.getName())));
+                addHistory(player, "unmute", target.getName(), target.getUniqueId().toString(), "", "");
             }
             case "heal" -> {
                 if (!player.hasPermission(getPermission("heal"))) {
@@ -554,7 +814,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                 target.setFoodLevel(20);
                 target.setSaturation(20f);
                 player.sendMessage(formatColor("messages.healed", Map.of("target", target.getName())));
-                addHistory(player, "heal", target.getName(), "", "");
+                addHistory(player, "heal", target.getName(), target.getUniqueId().toString(), "", "");
             }
             case "feed" -> {
                 if (!player.hasPermission(getPermission("feed"))) {
@@ -569,9 +829,12 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                 target.setFoodLevel(20);
                 target.setSaturation(20f);
                 player.sendMessage(formatColor("messages.fed", Map.of("target", target.getName())));
-                addHistory(player, "feed", target.getName(), "", "");
+                addHistory(player, "feed", target.getName(), target.getUniqueId().toString(), "", "");
             }
             case "info" -> {
+                if (targetName.isEmpty()) {
+                    return;
+                }
                 OfflinePlayer offlineTarget = resolvePlayer(targetName);
                 if (offlineTarget == null) {
                     player.sendMessage(formatColor("messages.player-offline"));
@@ -610,6 +873,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                 return;
             }
             mutedPlayers.remove(player.getUniqueId());
+            persist();
         }
 
         PendingAction pending = pendingActions.get(player.getUniqueId());
@@ -629,34 +893,34 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     return;
                 }
                 String name = target.getName() != null ? target.getName() : input;
-                player.openInventory(createActionMenu(player, name, target.isOnline()));
+                player.openInventory(createActionMenu(player, name, target.isOnline(), target.getUniqueId()));
                 player.sendMessage(formatColor("messages.lookup-opened", Map.of("target", name)));
             }
-            case "kick", "ban" -> {
+            case "kick" -> {
+                String reason = getReason(input);
+                OfflinePlayer targetOffline = resolvePlayer(pending.targetName());
+                if (targetOffline == null || !targetOffline.isOnline()) {
+                    player.sendMessage(formatColor("messages.player-offline"));
+                    return;
+                }
+                Player target = (Player) targetOffline;
+                target.kick(Component.text(reason));
+                player.sendMessage(formatColor("messages.kicked", Map.of("target", target.getName(), "reason", reason)));
+                addHistory(player, "kick", target.getName(), target.getUniqueId().toString(), reason, "");
+            }
+            case "ban" -> {
                 String reason = getReason(input);
                 OfflinePlayer targetOffline = resolvePlayer(pending.targetName());
                 if (targetOffline == null) {
                     player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
-                if (pending.action().equals("kick")) {
-                    if (!targetOffline.isOnline()) {
-                        player.sendMessage(formatColor("messages.player-offline"));
-                        return;
-                    }
-                    Player target = (Player) targetOffline;
-                    target.kick(Component.text(reason));
-                    player.sendMessage(formatColor("messages.kicked", Map.of("target", target.getName(), "reason", reason)));
-                    addHistory(player, "kick", target.getName(), reason, "");
-                } else {
-                    String name = targetOffline.getName() != null ? targetOffline.getName() : pending.targetName();
-                    Bukkit.getServer().getBanList(BanList.Type.NAME).addBan(name, reason, null, player.getName());
-                    if (targetOffline.isOnline()) {
-                        ((Player) targetOffline).kick(Component.text("Banned: ").append(Component.text(reason)));
-                    }
-                    player.sendMessage(formatColor("messages.banned", Map.of("target", name, "reason", reason)));
-                    addHistory(player, "ban", name, reason, "");
-                }
+                String name = targetOffline.getName() != null ? targetOffline.getName() : pending.targetName();
+                UUID targetUuid = targetOffline.getUniqueId();
+                Component summary = Component.text("Ban ").color(NamedTextColor.GRAY)
+                        .append(Component.text(name).color(NamedTextColor.AQUA))
+                        .append(Component.text(" — " + reason).color(NamedTextColor.GRAY));
+                openConfirmation(player, summary, () -> executeBan(player, targetOffline, name, targetUuid, reason));
             }
             case "tempban" -> {
                 String[] parts = input.split(" ", 2);
@@ -666,23 +930,19 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                     return;
                 }
                 String reason = parts.length > 1 ? parts[1] : "Temporary ban by administration.";
-                OfflinePlayer target = resolvePlayer(pending.targetName());
-                if (target == null) {
+                OfflinePlayer targetOffline = resolvePlayer(pending.targetName());
+                if (targetOffline == null) {
                     player.sendMessage(formatColor("messages.player-offline"));
                     return;
                 }
+                String name = targetOffline.getName() != null ? targetOffline.getName() : pending.targetName();
+                UUID targetUuid = targetOffline.getUniqueId();
                 Instant expiry = Instant.now().plus(duration);
-                String name = target.getName() != null ? target.getName() : pending.targetName();
-                Bukkit.getServer().getBanList(BanList.Type.NAME).addBan(name, reason, java.util.Date.from(expiry), player.getName());
-                if (target.isOnline()) {
-                    ((Player) target).kick(Component.text("Temporarily banned until ")
-                            .append(Component.text(expiry.toString())).append(Component.text(": ")).append(Component.text(reason)));
-                }
-                player.sendMessage(formatColor("messages.tempbanned", Map.of(
-                        "target", name,
-                        "duration", duration.toString(),
-                        "reason", reason)));
-                addHistory(player, "tempban", name, reason, "expires=" + expiry);
+                Component summary = Component.text("Tempban ").color(NamedTextColor.GRAY)
+                        .append(Component.text(name).color(NamedTextColor.AQUA))
+                        .append(Component.text(" for " + duration + " — " + reason).color(NamedTextColor.GRAY));
+                openConfirmation(player, summary,
+                        () -> executeTempban(player, targetOffline, name, targetUuid, reason, duration, expiry));
             }
             case "mute" -> {
                 String[] parts = input.split(" ", 2);
@@ -702,7 +962,7 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
                 player.sendMessage(formatColor("messages.muted", Map.of(
                         "target", target.getName(),
                         "duration", duration.toString())));
-                addHistory(player, "mute", target.getName(), reason, "expires=" + until);
+                addHistory(player, "mute", target.getName(), target.getUniqueId().toString(), reason, "expires=" + until);
             }
             default -> {
                 player.sendMessage(Component.text("Unknown pending action.").color(NamedTextColor.RED));
@@ -737,6 +997,18 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
             )));
         } else {
             mutedPlayers.remove(player.getUniqueId());
+            persist();
+        }
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        Player joined = event.getPlayer();
+        for (UUID vanishedId : vanishedPlayers) {
+            Player vanishedPlayer = Bukkit.getPlayer(vanishedId);
+            if (vanishedPlayer != null && !vanishedPlayer.equals(joined)) {
+                joined.hidePlayer(this, vanishedPlayer);
+            }
         }
     }
 
@@ -744,8 +1016,10 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
     public void onPlayerQuit(PlayerQuitEvent event) {
         Player player = event.getPlayer();
         pendingActions.remove(player.getUniqueId());
-        frozenPlayers.remove(player.getUniqueId());
-        mutedPlayers.remove(player.getUniqueId());
+        pendingConfirmations.remove(player.getUniqueId());
+        vanishedPlayers.remove(player.getUniqueId());
+        playerListPage.remove(player.getUniqueId());
+        historyPage.remove(player.getUniqueId());
     }
 
     @EventHandler(ignoreCancelled = true)
@@ -765,6 +1039,9 @@ public final class BetterAdminPlugin extends JavaPlugin implements Listener, Com
     private record PendingAction(String action, String targetName) {
     }
 
-    private record MuteEntry(Instant expires, String reason) {
+    private record PendingConfirmation(Runnable onConfirm) {
+    }
+
+    record MuteEntry(Instant expires, String reason) {
     }
 }

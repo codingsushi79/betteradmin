@@ -31,6 +31,11 @@ messages:
   fed: "Fed {target}."
   teleported: "Teleported to {target}."
   lookup-result-offline: "Opened actions for offline player {target}. Only ban/tempban actions will work."
+  config-reloaded: "BetterAdmin configuration reloaded."
+  action-cancelled: "Action cancelled."
+  undo-success: "Reverted {action} for {target}."
+  vanish-on: "You are now vanished."
+  vanish-off: "You are now visible."
 
 permissions:
   use: betteradmin.use
@@ -48,3 +53,6 @@ permissions:
   viewinventory: betteradmin.viewinventory
   viewenderchest: betteradmin.viewenderchest
   info: betteradmin.info
+  vanish: betteradmin.vanish
+  reload: betteradmin.reload
+  undo: betteradmin.undo
