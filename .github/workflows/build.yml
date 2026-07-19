@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - mc_target: '26'
+            java_version: '25'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java_version }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ matrix.java_version }}
+          distribution: temurin
+          cache: gradle
+
+      - name: Ensure Gradle wrapper JAR
+        run: |
+          if [ ! -f gradle/wrapper/gradle-wrapper.jar ]; then
+            echo "Downloading missing gradle-wrapper.jar"
+            mkdir -p gradle/wrapper
+            curl -L -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-9.2.1-bin.zip
+            unzip -p /tmp/gradle.zip gradle/wrapper/gradle-wrapper.jar > gradle/wrapper/gradle-wrapper.jar
+          fi
+
+      - name: Build with Gradle
+        run: ./gradlew build --no-daemon -PmcTarget="${{ matrix.mc_target }}"
